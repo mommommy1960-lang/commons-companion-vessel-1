@@ -20,7 +20,7 @@ class RestoreLedger:
             CREATE TABLE IF NOT EXISTS spent (nonce TEXT PRIMARY KEY, snapshot_hash TEXT NOT NULL, destination TEXT NOT NULL, source_head TEXT NOT NULL, key_epoch INTEGER NOT NULL, attempt INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS restore_audit (nonce TEXT PRIMARY KEY, decision TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS restore_jobs (generation TEXT PRIMARY KEY, nonce TEXT UNIQUE NOT NULL, snapshot_path TEXT NOT NULL, snapshot_hash TEXT NOT NULL, destination TEXT NOT NULL, source_head TEXT NOT NULL, key_epoch INTEGER NOT NULL, parent_generation TEXT, stage TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS publication (singleton INTEGER PRIMARY KEY CHECK(singleton=1), visible_generation TEXT);\n            CREATE TABLE IF NOT EXISTS restore_failures (generation TEXT PRIMARY KEY, reason TEXT NOT NULL, expected_hash TEXT NOT NULL, actual_hash TEXT);
+            CREATE TABLE IF NOT EXISTS publication (singleton INTEGER PRIMARY KEY CHECK(singleton=1), visible_generation TEXT);\n            CREATE TABLE IF NOT EXISTS restore_failures (generation TEXT PRIMARY KEY, reason TEXT NOT NULL, expected_hash TEXT NOT NULL, actual_hash TEXT);\n            CREATE TABLE IF NOT EXISTS attention_outbox (generation TEXT PRIMARY KEY, reason TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0);
             INSERT OR IGNORE INTO publication(singleton, visible_generation) VALUES(1, NULL);
             """)
 
@@ -103,9 +103,20 @@ class RestoreLedger:
             if job[1] != expected_hash:
                 db.rollback()
                 raise RestoreRejected("expected hash does not match approval")
-            db.execute("INSERT INTO restore_failures VALUES(?, ?, ?, ?)", (generation, reason, expected_hash, actual_hash))
+            db.execute("INSERT INTO restore_failures VALUES(?, ?, ?, ?)", (generation, reason, expected_hash, actual_hash))\n            db.execute("INSERT INTO attention_outbox(generation, reason) VALUES(?, ?)", (generation, reason))
             db.execute("UPDATE restore_jobs SET stage='STALLED' WHERE generation=?", (generation,))
             db.commit()
+
+
+    def pending_attention_outbox(self):
+        with self._connect() as db:
+            return db.execute("SELECT generation, reason FROM attention_outbox WHERE delivered=0 ORDER BY generation").fetchall()
+
+    def mark_attention_delivered(self, generation: str) -> None:
+        with self._connect() as db:
+            changed = db.execute("UPDATE attention_outbox SET delivered=1 WHERE generation=? AND delivered=0", (generation,)).rowcount
+            if changed != 1:
+                raise RestoreRejected("no pending attention event")
 
     def failure(self, generation: str):
         with self._connect() as db:
