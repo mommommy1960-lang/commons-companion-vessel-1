@@ -59,3 +59,29 @@ def test_failed_head_check_does_not_burn_nonce(tmp_path):
         ledger.consume(nonce="n1", snapshot_hash="s", destination="d", source_head="stale", key_epoch=2, attempt=1, decision="approved")
     ledger.set_trusted_head("stale")
     ledger.consume(nonce="n1", snapshot_hash="s", destination="d", source_head="stale", key_epoch=2, attempt=1, decision="approved")
+
+def test_generation_lifecycle_and_repeat_safe_publication(tmp_path):
+    ledger = RestoreLedger(tmp_path / "ledger.db")
+    ledger.set_trusted_head("head")
+    ledger.approve(generation="g1", nonce="n1", snapshot_path="snapshot.bin",
+                   snapshot_hash="hash", destination="core", source_head="head",
+                   key_epoch=2, attempt=1, decision="approved")
+    assert ledger.job("g1")[-1] == "APPROVED"
+    ledger.advance("g1", "APPROVED", "CONSTRUCTING")
+    ledger.advance("g1", "CONSTRUCTING", "READY")
+    assert ledger.publish("g1") is True
+    assert ledger.publish("g1") is False
+    assert ledger.job("g1")[-1] == "PUBLISHED"
+
+def test_conflicting_generation_fails_closed(tmp_path):
+    ledger = RestoreLedger(tmp_path / "ledger.db")
+    ledger.set_trusted_head("head")
+    for generation, nonce in (("g1", "n1"), ("g2", "n2")):
+        ledger.approve(generation=generation, nonce=nonce, snapshot_path=generation,
+                       snapshot_hash=generation, destination="core", source_head="head",
+                       key_epoch=2, attempt=1, decision="approved")
+        ledger.advance(generation, "APPROVED", "CONSTRUCTING")
+        ledger.advance(generation, "CONSTRUCTING", "READY")
+    assert ledger.publish("g1") is True
+    with pytest.raises(RestoreRejected):
+        ledger.publish("g2")
