@@ -85,3 +85,15 @@ def test_conflicting_generation_fails_closed(tmp_path):
     assert ledger.publish("g1") is True
     with pytest.raises(RestoreRejected):
         ledger.publish("g2")
+
+def test_next_generation_requires_visible_parent(tmp_path):
+    ledger = RestoreLedger(tmp_path / "ledger.db")
+    ledger.set_trusted_head("head")
+    for generation, nonce, parent in (("g1", "n1", None), ("g2", "n2", "g1")):
+        ledger.approve(generation=generation, nonce=nonce, snapshot_path=generation,
+                       snapshot_hash=generation, destination="core", source_head="head",
+                       key_epoch=2, attempt=1, decision="approved",
+                       parent_generation=parent)
+        ledger.advance(generation, "APPROVED", "CONSTRUCTING")
+        ledger.advance(generation, "CONSTRUCTING", "READY")
+        assert ledger.publish(generation) is True
