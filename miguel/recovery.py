@@ -2,10 +2,21 @@
 from __future__ import annotations
 import hashlib
 from pathlib import Path
+from .attention import AttentionLedger
 from .persistence import EnvelopeError, decode_snapshot
 from .restore_ledger import RestoreLedger, RestoreRejected
 
-def recover_verified(ledger: RestoreLedger, generation: str, *, key: bytes):
+def _stall(ledger, attention, generation, reason, expected, actual, worker, observer_key):
+    ledger.stall(generation, reason=reason, expected_hash=expected, actual_hash=actual)
+    if attention is not None:
+        attention.require(generation=generation, reason=reason, expected_hash=expected,
+                          actual_hash=actual, observer_worker=worker,
+                          observer_key_id=observer_key)
+
+def recover_verified(ledger: RestoreLedger, generation: str, *, key: bytes,
+                     attention: AttentionLedger | None = None,
+                     observer_worker: str = "unknown",
+                     observer_key_id: str = "unknown"):
     job = ledger.job(generation)
     if job is None:
         raise RestoreRejected("unknown restore generation")
@@ -15,14 +26,14 @@ def recover_verified(ledger: RestoreLedger, generation: str, *, key: bytes):
     try:
         held = Path(path).read_bytes()
     except FileNotFoundError:
-        ledger.stall(generation, reason="snapshot_missing", expected_hash=expected, actual_hash=None)
+        _stall(ledger, attention, generation, "snapshot_missing", expected, None, observer_worker, observer_key_id)
         raise RestoreRejected("snapshot missing; generation stalled")
     actual = hashlib.sha256(held).hexdigest()
     if actual != expected:
-        ledger.stall(generation, reason="snapshot_hash_mismatch", expected_hash=expected, actual_hash=actual)
+        _stall(ledger, attention, generation, "snapshot_hash_mismatch", expected, actual, observer_worker, observer_key_id)
         raise RestoreRejected("snapshot changed; generation stalled")
     try:
         return decode_snapshot(held, key=key)
     except EnvelopeError as exc:
-        ledger.stall(generation, reason="snapshot_authentication_failed", expected_hash=expected, actual_hash=actual)
+        _stall(ledger, attention, generation, "snapshot_authentication_failed", expected, actual, observer_worker, observer_key_id)
         raise RestoreRejected("snapshot authentication failed; generation stalled") from exc
