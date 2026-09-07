@@ -1,0 +1,34 @@
+name: Commons Safety Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  safety-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require governance files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in GOVERNANCE.md SECURITY.md THREAT_MODEL.md CAPABILITY_BOUNDARIES.md DISCLOSURE_LEVELS.md SAFETY_CASE.md CHANGE_CONTROL.md; do
+            test -f "$file" || { echo "Missing required file: $file"; exit 1; }
+          done
+      - name: Block obvious committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches="$(find . -type f \( -name '*.pem' -o -name '*.key' -o -name '.env' -o -name '.env.*' \) -not -path './.git/*' -print)"
+          test -z "$matches" || { echo "$matches"; exit 1; }
+      - name: Validate invariants
+        shell: bash
+        run: |
+          grep -Fq "Trust never grants authority." GOVERNANCE.md
+          grep -Fq "Default deny applies to consequential actions." GOVERNANCE.md
+          grep -Fq "Trust does not confer authority." CAPABILITY_BOUNDARIES.md
