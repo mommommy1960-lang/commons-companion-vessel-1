@@ -1,0 +1,5 @@
+# CODEOWNERS
+* @mommommy1960-lang
+.github/ @mommommy1960-lang
+docs/ @mommommy1960-lang
+tests/ @mommommy1960-lang
